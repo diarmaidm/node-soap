@@ -4,27 +4,31 @@ var fs = require('fs'),
     soap = require('..'),
     https = require('https'),
     constants = require('constants'),
+    util = require('util'),
+    req = require('request'),
+    httpClient = require('../lib/http.js'),
+    events = require('events'),
     assert = require('assert');
 
-var test = {};
-test.service = {
-  StockQuoteService: {
-    StockQuotePort: {
-      GetLastTradePrice: function(args) {
-        if (args.tickerSymbol === 'trigger error') {
-          throw new Error('triggered server error');
-        } else {
-          return { price: 19.56 };
-        }
-      }
-    }
-  }
-};
+// var test = {};
+// test.service = {
+//   StockQuoteService: {
+//     StockQuotePort: {
+//       GetLastTradePrice: function(args) {
+//         if (args.tickerSymbol === 'trigger error') {
+//           throw new Error('triggered server error');
+//         } else {
+//           return { price: 19.56 };
+//         }
+//       }
+//     }
+//   }
+// };
 
-test.sslOptions = {
-  key: fs.readFileSync(__dirname + '/certs/agent2-key.pem'),
-  cert: fs.readFileSync(__dirname + '/certs/agent2-cert.pem')
-};
+// test.sslOptions = {
+//   key: fs.readFileSync(__dirname + '/certs/agent2-key.pem'),
+//   cert: fs.readFileSync(__dirname + '/certs/agent2-cert.pem')
+// };
 
 describe('SOAP Client(SSL)', function() {
   // before(function(done) {
@@ -61,16 +65,115 @@ describe('SOAP Client(SSL)', function() {
   //   });
   // });
 
+  var test = {};
+  test.sslOptions = {
+    key: fs.readFileSync(__dirname + '/certs/agent2-key.pem'),
+    ca: fs.readFileSync(__dirname + '/certs/agent2-cert.pem'),
+    cert: fs.readFileSync(__dirname + '/certs/agent2-cert.pem')
+  };
+
+  CustomAgent.prototype.addRequest = function(req, options) {
+      console.log('11--10th-------------------------------------------------------------');
+    // req.onSocket(this.proxyStream);
+  };
+
+//Make a custom http agent to use ..... instead of ......
+  function CustomAgent(options){
+      console.log('12--3rd-------------------------------------------------------------');
+    var self = this;
+    events.EventEmitter.call(this);
+    self.requests = [];
+    self.maxSockets = 1;
+    self.method = 'POST';
+    self.options = options || {};
+    self.proxyOptions = {};
+      console.log('13--4th-------------------------------------------------------------');
+  }
+
+  var options = {
+    hostname: 'apitest.authorize.net',
+    port: 443,
+    path: '/soap/v1/',
+    method: 'POST',
+    ca: fs.readFileSync(__dirname + '/certs/agent2-cert.pem'),
+    tunnel: true,
+    headers: {'Content-Type': 'text/xml',
+            //'Content-Length': Buffer.byteLength(post_data),
+            // 'Content-Length': post_data.length,
+            'Connection': 'keep-alive',
+            "SOAPAction": ""}
+    };
+
+  //Custom httpClient
+  function MyHttpClient (options){
+    console.log('14--1st-------------------------------------------------------------');
+    httpClient.call(this,options);
+    console.log('15--2nd----------------------------------------------------options--', options);
+    this.agent = new CustomAgent(options);
+    console.log('16--5th----------------------------------------------------agent----', this.agent);
+  }
+
+/*****************/
+// var args = '{<messages>
+//           <MessagesTypeMessage>
+//             <code>1</code>
+//             <text>one</text>
+//           </MessagesTypeMessage>
+//           <MessagesTypeMessage>
+//             <code>2</code>
+//             <text>two</text>
+//           </MessagesTypeMessage>
+//         </messages>}'
+/*****************/
+
+  util.inherits(MyHttpClient, httpClient);
+
+  MyHttpClient.prototype.request = function(rurl, data, callback, exheaders, exoptions) {
+      console.log('17--6th--data-----------------------------------------------------------', data);
+    var self = this;
+    console.log('w-odd-options------------------------------------------------------------', options);
+    var options = self.buildRequest(rurl, data, exheaders, exoptions);
+    console.log('x-odd-options------------------------------------------------------------', options);
+
+    //Specify agent to use
+    options.agent = this.agent;
+      console.log('18--7th-------------------------------------------------------------');
+    var headers = options.headers;
+      console.log('19--8th-------------------------------------------------------------');
+    var req = self._request(options, function(err, res, body) {
+      console.log('20---------------------------------------------------------------');
+      if (err) {
+      console.log('21---------------------------------------------------------------');
+        return callback(err);
+      }
+      console.log('22---------------------------------------------------------------');
+      body = self.handleResponse(req, res, body);
+      callback(null, res, body);
+    });
+    if (headers.Connection !== 'keep-alive') {
+      console.log('23--9th-------------------------------------------------------------');
+      req.end(data);
+    }
+      console.log('24---------------------------------------------------------------');
+    return req;
+  };
+
   it('should connect to an SSL server', function(done) {
     // soap.createClient(__dirname + '/wsdl/strict/stockquote.wsdl', function(err, client) {
-    soap.createClient('https://apitest.authorize.net/soap/v1/Service.asmx?WSDL', function(err, client) {
+      console.log('25--options-------------------------------------------------------------', options);
+    var httpCustomClient = new MyHttpClient(options);
+      console.log('26---------------------------------------------httpCustomClient--', httpCustomClient);
+    var url = 'https://apitest.authorize.net/soap/v1/Service.asmx?WSDL';
+      console.log('27---------------------------------------------------------------');
+    soap.createClient(url, {httpClient: httpCustomClient}, function(err, client) {
+      console.log('28---------------------------------------------------------------');
       console.log('after created the client:', client);
       console.log('*1*********************************************************************************');
       assert.ok(!err);
       console.log('*2*********************************************************************************');
 // "https://api.authorize.net/soap/v1/IsAlive"
       // client.setEndpoint(test.baseUrl + '/stockquote');
-      client.setEndpoint("https://api.authorize.net/soap/v1/IsAlive");
+      client.setEndpoint("https://apitest.authorize.net/soap/v1/Service.asmx");
       console.log('*3*********************************************************************************');
       client.setSecurity({
         addOptions:function(options){
@@ -79,6 +182,7 @@ describe('SOAP Client(SSL)', function() {
           options.rejectUnauthorized = false;
           options.secureOptions = constants.SSL_OP_NO_TLSv1_2;
           options.strictSSL = false;
+          options.tunnel = true;
           options.agent = new https.Agent(options);
         },
         toXML: function() { return ''; }
