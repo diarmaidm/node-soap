@@ -8,6 +8,10 @@ var fs = require('fs'),
     req = require('request'),
     httpClient = require('../lib/http.js'),
     events = require('events'),
+    stream = require('readable-stream'),
+    duplexer = require('duplexer'),
+    should = require('should'),
+    semver = require('semver'),
     assert = require('assert');
 
 // var test = {};
@@ -72,18 +76,21 @@ describe('SOAP Client(SSL)', function() {
     cert: fs.readFileSync(__dirname + '/certs/agent2-cert.pem')
   };
 
+  util.inherits(CustomAgent, events.EventEmitter);
+
   CustomAgent.prototype.addRequest = function(req, options) {
       console.log('11--10th-------------------------------------------------------------');
-    // req.onSocket(this.proxyStream);
+    req.onSocket(this.proxyStream);
   };
 
 //Make a custom http agent to use ..... instead of ......
-  function CustomAgent(options){
+  function CustomAgent(options, socket){
       console.log('12--3rd-------------------------------------------------------------');
     var self = this;
     events.EventEmitter.call(this);
     self.requests = [];
     self.maxSockets = 1;
+    self.proxyStream = socket;
     self.method = 'POST';
     self.options = options || {};
     self.proxyOptions = {};
@@ -104,12 +111,19 @@ describe('SOAP Client(SSL)', function() {
             "SOAPAction": ""}
     };
 
+  //Create a duplex stream     
+  var httpReqStream = new stream.PassThrough();
+  var httpResStream = new stream.PassThrough();
+  var socketStream = duplexer(httpReqStream, httpResStream);
+
   //Custom httpClient
-  function MyHttpClient (options){
+  function MyHttpClient (options, socket){
     console.log('14--1st-------------------------------------------------------------');
     httpClient.call(this,options);
     console.log('15--2nd----------------------------------------------------options--', options);
-    this.agent = new CustomAgent(options);
+    var tempAgent = new CustomAgent(options, socket);
+    this.agent = tempAgent.agent;
+    // this.agent = new CustomAgent(options, socket);
     console.log('16--5th----------------------------------------------------agent----', this.agent);
   }
 
@@ -158,23 +172,48 @@ describe('SOAP Client(SSL)', function() {
     return req;
   };
 
+  var wsdl = fs.readFileSync('./test/wsdl/Service.wsdl').toString('utf8');
+  httpReqStream.once('readable', function readRequest() {
+    console.log('.....1:');
+    var chunk = httpReqStream.read();
+    console.log('.....2 chunk:', chunk);
+    should.exist(chunk);
+    console.log('.....3:');
+    
+    //This is for compatibility with old node releases <= 0.10
+    //Hackish
+    if(semver.lt(process.version, '0.11.0'))
+    {
+      console.log('.....6:');
+      socketStream.on('data', function(data) {
+        socketStream.ondata(data,0,1984);
+      });
+    }
+    //Now write the response with the wsdl
+    console.log('.....4:');
+    // var state = httpResStream.write('HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\nContent-Length: 1904\r\n\r\n'+wsdl);
+    var state = httpResStream.write('HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\nContent-Length: 1904\r\n\r\n'+wsdl);
+    console.log('.....5 state:', state);
+  });
+
+
   it('should connect to an SSL server', function(done) {
     // soap.createClient(__dirname + '/wsdl/strict/stockquote.wsdl', function(err, client) {
       console.log('25--options-------------------------------------------------------------', options);
-    var httpCustomClient = new MyHttpClient(options);
+    var httpCustomClient = new MyHttpClient(options, socketStream);
       console.log('26---------------------------------------------httpCustomClient--', httpCustomClient);
     var url = 'https://apitest.authorize.net/soap/v1/Service.asmx?WSDL';
       console.log('27---------------------------------------------------------------');
     soap.createClient(url, {httpClient: httpCustomClient}, function(err, client) {
       console.log('28---------------------------------------------------------------');
       console.log('after created the client:', client);
-      console.log('*1*********************************************************************************');
+      console.log('*1*************************************************');
       assert.ok(!err);
-      console.log('*2*********************************************************************************');
+      console.log('*2*************************************************');
 // "https://api.authorize.net/soap/v1/IsAlive"
       // client.setEndpoint(test.baseUrl + '/stockquote');
       client.setEndpoint("https://apitest.authorize.net/soap/v1/Service.asmx");
-      console.log('*3*********************************************************************************');
+      console.log('*3*************************************************');
       client.setSecurity({
         addOptions:function(options){
           options.cert = test.sslOptions.cert,
@@ -187,10 +226,10 @@ describe('SOAP Client(SSL)', function() {
         },
         toXML: function() { return ''; }
       });
-      console.log('*4*********************************************************************************');
+      console.log('*4*************************************************\n', client);
 
       client.IsAlive('', function(err, result) {
-        console.log('*5*********************************************************************************');
+        console.log('*5*************************************************');
         assert.ok(!err);
         // assert.equal(19.56, parseFloat(result.price));
         done();
